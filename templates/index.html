@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tomato Disease Detection</title>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="static/css/style.css">
+</head>
+<body>
+
+<header>
+    <h1>🍅 ระบบวินิจฉัยโรคใบมะเขือเทศ</h1>
+    <p>Tomato Leaf Disease Detection · AI-Powered</p>
+</header>
+
+<div class="container">
+
+    <!-- GUIDE -->
+    <div class="guide-box">
+        <span class="icon">💡</span>
+        <div>
+            <b>คำแนะนำ:</b> ถ่ายหรือเลือกภาพ <b>"ใบเดี่ยว เน้นกลางภาพ"</b>
+            จัดให้รอยโรคอยู่ในเฟรมหลัก เพื่อความแม่นยำสูงสุด
+        </div>
+    </div>
+
+    <!-- UPLOAD FORM -->
+    <div class="card">
+        <label class="upload-label">อัปโหลดรูปภาพใบพืช</label>
+        <div class="upload-zone" id="upload-zone">
+            <input type="file" name="image" id="image" accept="image/*">
+            <div class="upload-icon">📷</div>
+            <div class="upload-text">คลิกหรือลากรูปมาวางที่นี่</div>
+            <div class="upload-sub">รองรับ PNG, JPG, JPEG, WEBP · ไม่เกิน 5MB</div>
+        </div>
+        <div id="file-error" class="file-error" style="display:none"></div>
+        <div id="file-name-display"></div>
+        <img id="preview-img" alt="preview">
+        <button class="btn-submit" id="submit-btn" disabled>
+            <span id="btn-icon">🔍</span>
+            <span id="btn-text">วินิจฉัยโรค</span>
+        </button>
+    </div>
+
+    <!-- ERROR from server -->
+    <div id="server-error" class="error-box" style="display:none"></div>
+
+    <!-- RESULT (rendered by JS) -->
+    <div id="result-card" class="card" style="display:none">
+
+        <div class="result-header">▸ ผลการวินิจฉัย</div>
+
+        <!-- Main result -->
+        <div class="result-main" id="result-main">
+            <div class="result-icon" id="result-icon"></div>
+            <div style="flex:1">
+                <div class="result-name" id="result-name"></div>
+                <div class="conf-label">ความมั่นใจ: <b id="conf-pct"></b></div>
+                <div class="conf-bar-wrap">
+                    <div class="conf-bar-fill" id="conf-bar"></div>
+                </div>
+            </div>
+            <!-- Copy button -->
+            <button class="btn-copy" id="btn-copy" title="คัดลอกผลลัพธ์">📋</button>
+        </div>
+
+        <!-- Disease info -->
+        <div id="disease-info-section" style="display:none">
+            <div class="disease-info">
+                <div class="info-title">📋 ข้อมูลโรค</div>
+                <div class="info-grid">
+                    <div class="info-row">
+                        <div class="label">สาเหตุ</div>
+                        <div class="value" id="info-cause"></div>
+                    </div>
+                    <div class="info-row">
+                        <div class="label">อาการ</div>
+                        <div class="value" id="info-symptom"></div>
+                    </div>
+                    <div class="info-row">
+                        <div class="label">การรักษา</div>
+                        <div class="value" id="info-treatment"></div>
+                    </div>
+                </div>
+            </div>
+            <hr class="divider">
+        </div>
+
+        <!-- TOP 3 -->
+        <div id="top3-section" style="display:none">
+            <div class="top3-title">Top 3 Predictions</div>
+            <div id="top3-list"></div>
+            <hr class="divider">
+        </div>
+
+        <!-- Uploaded image -->
+        <div id="img-section" style="display:none">
+            <div class="img-label">รูปที่อัปโหลด</div>
+            <img id="result-img" class="uploaded-img" alt="Uploaded Leaf">
+        </div>
+
+    </div>
+
+</div>
+
+<footer>Tomato Disease Detection System · MobileNetV2</footer>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
