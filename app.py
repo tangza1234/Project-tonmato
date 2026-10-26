@@ -10,7 +10,7 @@ app.config['UPLOAD_FOLDER'] = 'static/uploads'
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
-MODEL_PATH = 'final_model.h5'
+MODEL_PATH = 'finalmodel.h5'
 model = load_model(MODEL_PATH)
 
 classes = [
