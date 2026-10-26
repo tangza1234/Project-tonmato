@@ -7,6 +7,7 @@ from tensorflow.keras.preprocessing import image
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
