@@ -1,8 +1,15 @@
 import os
-from flask import Flask, render_template, request, jsonify
+import threading
+
 import numpy as np
+from flask import Flask, render_template, request, jsonify
 from PIL import Image, UnidentifiedImageError
-from tensorflow.keras.models import load_model
+
+# ใช้ตัวรัน TFLite แบบเบา แทน TensorFlow เต็มตัว (กินแรมน้อยกว่ามาก)
+try:
+    from ai_edge_litert.interpreter import Interpreter
+except ImportError:  # เผื่อรันในเครื่องที่มีแต่ tensorflow
+    from tensorflow.lite.python.interpreter import Interpreter
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 6 * 1024 * 1024  # จำกัดไฟล์ไม่เกิน ~6MB
@@ -10,17 +17,31 @@ app.config['MAX_CONTENT_LENGTH'] = 6 * 1024 * 1024  # จำกัดไฟล�
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, 'finalmodel.h5')
-model = load_model(MODEL_PATH)
+MODEL_PATH = os.path.join(BASE_DIR, 'model.tflite')
 
-classes = [
-    "Not_Tomato_Leaf",
+IMG_SIZE = (224, 224)
+
+# ต้องตรงกับตอนเทรนในโน้ตบุ๊ก (USE_CENTER_CROP / CENTER_CROP_RATIO)
+USE_CENTER_CROP = True
+CENTER_CROP_RATIO = 0.6
+
+# ---------- เกณฑ์ตัดสินใจ (ปรับได้) ----------
+CONF_HIGH = 70.0              # % ตั้งแต่ค่านี้ขึ้นไป = ตอบมั่นใจ
+CONF_MIN = 50.0               # % ต่ำกว่านี้ = "ไม่สามารถระบุได้"; ระหว่าง CONF_MIN-CONF_HIGH = ตอบพร้อมคำเตือน "ความมั่นใจปานกลาง"
+MIN_LEAF_RATIO = 0.15         # สัดส่วนพิกเซล "สีใบพืช" ขั้นต่ำในส่วนกึ่งกลางภาพ
+NOT_TOMATO_MIN_CONF = 50.0    # โมเดล 6 คลาส: ทาย Not_Tomato_Leaf ที่ความมั่นใจเท่าไรถึงจะเชื่อ
+
+# ลำดับคลาสต้องตรงกับ train_data.class_indices ของโน้ตบุ๊ก
+# (flow_from_directory เรียงตามตัวอักษร: "Not_Tomato_Leaf" มาก่อน "Tomato___...")
+NOT_TOMATO = "Not_Tomato_Leaf"
+CLASSES_5 = [
     "Tomato___Bacterial_spot",
     "Tomato___Early_blight",
     "Tomato___Late_blight",
     "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
-    "Tomato___healthy"
+    "Tomato___healthy",
 ]
+CLASSES_6 = [NOT_TOMATO] + CLASSES_5
 
 DISEASE_INFO = {
     "Tomato___Bacterial_spot": {
@@ -55,14 +76,82 @@ DISEASE_INFO = {
     }
 }
 
+# ---------- โหลดโมเดล TFLite ----------
+interpreter = Interpreter(model_path=MODEL_PATH, num_threads=1)
+interpreter.allocate_tensors()
+_input = interpreter.get_input_details()[0]
+_output = interpreter.get_output_details()[0]
+_lock = threading.Lock()  # Interpreter ไม่ thread-safe
+
+_n_out = int(_output['shape'][-1])
+if _n_out == len(CLASSES_6):
+    CLASSES = CLASSES_6      # โมเดลที่มีคลาส Not_Tomato_Leaf
+elif _n_out == len(CLASSES_5):
+    CLASSES = CLASSES_5      # โมเดล 5 คลาส ใช้ตัวกรองสีใบพืชช่วยแทน
+else:
+    raise RuntimeError(
+        f"โมเดลมี {_n_out} เอาต์พุต แต่แอปรองรับ 5 หรือ 6 คลาสเท่านั้น — "
+        f"ตรวจสอบว่าใช้ไฟล์โมเดลที่เทรนจากโน้ตบุ๊กถูกตัว"
+    )
+HAS_NOT_TOMATO_CLASS = NOT_TOMATO in CLASSES
+
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def preprocess(file_stream):
+    """ทำให้เหมือนตอนเทรนในโน้ตบุ๊ก:
+    1) ย่อภาพเป็น 224x224 แบบ nearest (ค่าเริ่มต้นของ keras load_img)
+    2) ครอปกึ่งกลาง CENTER_CROP_RATIO แล้วขยายกลับเป็น 224x224 แบบ bilinear
+    3) หารด้วย 255
+    """
+    img = Image.open(file_stream).convert('RGB').resize(IMG_SIZE, Image.NEAREST)
+
+    if USE_CENTER_CROP:
+        w, h = img.size
+        crop_h = int(h * CENTER_CROP_RATIO)
+        crop_w = int(w * CENTER_CROP_RATIO)
+        top = (h - crop_h) // 2
+        left = (w - crop_w) // 2
+        img = img.crop((left, top, left + crop_w, top + crop_h)).resize(IMG_SIZE, Image.BILINEAR)
+
+    return img
+
+
+def leaf_ratio(img):
+    """สัดส่วนพิกเซลที่เป็น "สีพืช" (เหลืองอมเขียว/เขียว) ในภาพที่โมเดลมองจริง
+    ใช้กรองรูปที่ไม่ใช่ใบพืชเลย เช่น ภาพหน้าจอ เอกสาร ท้องฟ้า วัตถุสีล้วน สีผิว
+    (ใบที่เป็นโรคยังมีส่วนสีเขียว/เหลืองปนอยู่ จึงยังผ่านเกณฑ์)"""
+    small = img.resize((112, 112), Image.BOX)          # เฉลี่ยสีก่อน ลด noise
+    hsv = np.asarray(small.convert('HSV'), dtype=np.float32)
+    hue = hsv[..., 0] * 360.0 / 255.0
+    sat = hsv[..., 1] / 255.0
+    val = hsv[..., 2] / 255.0
+    veg = (hue >= 35) & (hue <= 165) & (sat >= 0.25) & (val >= 0.20)
+    return float(veg.mean())
+
+
+def to_batch(img):
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    return np.expand_dims(arr, axis=0)
+
+
+def run_model(batch):
+    with _lock:
+        interpreter.set_tensor(_input['index'], batch)
+        interpreter.invoke()
+        return interpreter.get_tensor(_output['index'])[0].copy()
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/healthz')
+def healthz():
+    return 'ok'
 
 
 @app.errorhandler(413)
@@ -83,43 +172,45 @@ def predict():
     if not allowed_file(file.filename):
         return jsonify({'error': 'รองรับเฉพาะไฟล์ PNG, JPG, JPEG, WEBP เท่านั้น'}), 400
 
-    # ประมวลผลในหน่วยความจำ ไม่ต้องบันทึกไฟล์ลงดิสก์
     try:
-        img = Image.open(file.stream).convert('RGB').resize((224, 224))
-    except (UnidentifiedImageError, OSError):
+        img = preprocess(file.stream)
+    except (UnidentifiedImageError, OSError, ValueError):
         return jsonify({'error': 'ไฟล์ภาพเสียหายหรืออ่านไม่ได้'}), 400
 
-    img_array = np.asarray(img, dtype=np.float32)
-    img_array = np.expand_dims(img_array, axis=0) / 255.0
+    probs = run_model(to_batch(img))
 
-    predictions = model.predict(img_array, verbose=0)
-    class_index = int(np.argmax(predictions[0]))
-    ai_confidence = round(float(predictions[0][class_index]) * 100, 2)
-    model_result = classes[class_index]
+    class_index = int(np.argmax(probs))
+    ai_confidence = round(float(probs[class_index]) * 100, 2)
+    model_result = CLASSES[class_index]
 
-    top3_idx = np.argsort(predictions[0])[-3:][::-1]
+    ratio = leaf_ratio(img)
+
+    top_idx = np.argsort(probs)[-3:][::-1]
     top3 = [
         {
-            "class": classes[idx],
-            "name": DISEASE_INFO.get(classes[idx], {}).get("name_th", classes[idx]),
-            "confidence": round(float(predictions[0][idx]) * 100, 2)
+            "class": CLASSES[i],
+            "name": DISEASE_INFO.get(CLASSES[i], {}).get("name_th", CLASSES[i]),
+            "confidence": round(float(probs[i]) * 100, 2)
         }
-        for idx in top3_idx
+        for i in top_idx
     ]
 
-    if ai_confidence < 70:
-        result_text = "ไม่สามารถระบุได้ (ความมั่นใจต่ำ)"
-        result_type = "unknown"
-        disease_info = None
-    elif class_index == 0:
-        result_text = "ไม่ใช่ใบมะเขือเทศ"
-        result_type = "not_tomato"
-        disease_info = None
+    disease_info = None
+    if model_result == NOT_TOMATO and ai_confidence >= NOT_TOMATO_MIN_CONF:
+        # โมเดลเองบอกว่าไม่ใช่ใบมะเขือเทศ
+        result_text, result_type = "ไม่ใช่ใบมะเขือเทศ", "not_tomato"
+    elif ratio < MIN_LEAF_RATIO:
+        # ภาพแทบไม่มีสีพืชเลย ไม่น่าใช่ใบ
+        result_text, result_type = "ไม่ใช่ใบมะเขือเทศ (ไม่พบใบพืชในภาพ)", "not_tomato"
+    elif ai_confidence < CONF_MIN or model_result == NOT_TOMATO:
+        result_text, result_type = "ไม่สามารถระบุได้ (ความมั่นใจต่ำ)", "unknown"
     else:
         info = DISEASE_INFO.get(model_result, {})
         result_text = info.get("name_th", model_result)
         result_type = "healthy" if model_result == "Tomato___healthy" else "disease"
         disease_info = info
+        if ai_confidence < CONF_HIGH:
+            result_text += " (ความมั่นใจปานกลาง ควรตรวจซ้ำ)"
 
     return jsonify({
         'result': result_text,
@@ -132,4 +223,4 @@ def predict():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 7860)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
