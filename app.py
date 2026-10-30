@@ -30,6 +30,9 @@ CONF_HIGH = 70.0              # % ตั้งแต่ค่านี้ขึ�
 CONF_MIN = 50.0               # % ต่ำกว่านี้ = "ไม่สามารถระบุได้"; ระหว่าง CONF_MIN-CONF_HIGH = ตอบพร้อมคำเตือน "ความมั่นใจปานกลาง"
 MIN_LEAF_RATIO = 0.15         # สัดส่วนพิกเซล "สีใบพืช" ขั้นต่ำในส่วนกึ่งกลางภาพ
 NOT_TOMATO_MIN_CONF = 50.0    # โมเดล 6 คลาส: ทาย Not_Tomato_Leaf ที่ความมั่นใจเท่าไรถึงจะเชื่อ
+# โมเดลบอก "ไม่ใช่ใบมะเขือเทศ" แต่ภาพมีสีพืชมากกว่าค่านี้ (สัดส่วนพิกเซล) = อาจเป็นมะเขือเทศที่ถ่ายกว้าง/ไกล/ทั้งต้น
+# โมเดลมักมั่นใจเกินไปกับภาพแบบนี้ จึงไม่ฟันธง แต่ตอบข้อความกลาง ๆ ให้ถ่ายใหม่แทน
+NOT_TOMATO_SOFT_LEAF_RATIO = 0.30
 
 # ลำดับคลาสต้องตรงกับ train_data.class_indices ของโน้ตบุ๊ก
 # (flow_from_directory เรียงตามตัวอักษร: "Not_Tomato_Leaf" มาก่อน "Tomato___...")
@@ -196,9 +199,18 @@ def predict():
     ]
 
     disease_info = None
+    soft_not_tomato = False
     if model_result == NOT_TOMATO and ai_confidence >= NOT_TOMATO_MIN_CONF:
-        # โมเดลเองบอกว่าไม่ใช่ใบมะเขือเทศ
-        result_text, result_type = "ไม่ใช่ใบมะเขือเทศ", "not_tomato"
+        if ratio >= NOT_TOMATO_SOFT_LEAF_RATIO:
+            # ภาพมีพืชเขียวเยอะ: อาจเป็นใบมะเขือเทศที่ถ่ายกว้าง/ไกล/ทั้งต้น หรือพืชอื่น ไม่ฟันธง
+            result_text, result_type = (
+                "ไม่พบใบมะเขือเทศที่ชัดเจนในภาพ — ภาพอาจกว้างหรือไกลเกินไป หรือเป็นพืชชนิดอื่น "
+                "ลองถ่ายใบมะเขือเทศ 1 ใบ ระยะใกล้ให้เต็มภาพ"
+            ), "unknown"
+            soft_not_tomato = True
+        else:
+            # โมเดลเองบอกว่าไม่ใช่ใบมะเขือเทศ และภาพมีสีพืชน้อย
+            result_text, result_type = "ไม่ใช่ใบมะเขือเทศ", "not_tomato"
     elif ratio < MIN_LEAF_RATIO:
         # ภาพแทบไม่มีสีพืชเลย ไม่น่าใช่ใบ
         result_text, result_type = "ไม่ใช่ใบมะเขือเทศ (ไม่พบใบพืชในภาพ)", "not_tomato"
@@ -215,10 +227,12 @@ def predict():
     return jsonify({
         'result': result_text,
         'result_type': result_type,
-        'confidence': ai_confidence,
+        # กรณีไม่ฟันธง ไม่แสดงตัวเลข/อันดับของโมเดล เพราะ "Not Tomato 99%" จะขัดกับข้อความที่บอกว่าไม่แน่ใจ
+        'confidence': 0 if soft_not_tomato else ai_confidence,
+        'hide_confidence': soft_not_tomato,
         'image_path': None,
         'disease_info': disease_info,
-        'top3': top3
+        'top3': [] if soft_not_tomato else top3
     })
 
 

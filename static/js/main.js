@@ -23,6 +23,8 @@
     var resultName = document.getElementById('result-name');
     var confPct = document.getElementById('conf-pct');
     var confBar = document.getElementById('conf-bar');
+    var confLabel = confPct.parentElement;   // บรรทัด "ความมั่นใจ: xx%"
+    var confWrap = confBar.parentElement;    // แถบความมั่นใจ
     var btnCopy = document.getElementById('btn-copy');
 
     var diseaseSection = document.getElementById('disease-info-section');
@@ -247,6 +249,11 @@
         resultName.textContent = data.result || '-';
         confPct.textContent = confidence.toFixed(2) + '%';
 
+        // กรณีเซิร์ฟเวอร์ไม่ฟันธง (hide_confidence) ซ่อนตัวเลขและแถบความมั่นใจ
+        var hideConf = !!data.hide_confidence;
+        confLabel.style.display = hideConf ? 'none' : '';
+        confWrap.style.display = hideConf ? 'none' : '';
+
         // เริ่มจาก 0 แล้วค่อยขยาย เพื่อให้มีแอนิเมชัน
         confBar.style.width = '0%';
         requestAnimationFrame(function () {
@@ -316,10 +323,10 @@
         }
 
         // ข้อความสำหรับปุ่มคัดลอก
-        var lines = [
-            'ผลการวินิจฉัย: ' + (data.result || '-'),
-            'ความมั่นใจ: ' + confidence.toFixed(2) + '%'
-        ];
+        var lines = ['ผลการวินิจฉัย: ' + (data.result || '-')];
+        if (!hideConf) {
+            lines.push('ความมั่นใจ: ' + confidence.toFixed(2) + '%');
+        }
         if (info) {
             lines.push('สาเหตุ: ' + (info.cause || '-'));
             lines.push('อาการ: ' + (info.symptom || '-'));
